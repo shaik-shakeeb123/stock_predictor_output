@@ -19,7 +19,13 @@ FEATURE_COLUMNS = [
     "Daily_Return"
 ]
 
-app = Flask(__name__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+app = Flask(
+    __name__,
+    template_folder=os.path.join(BASE_DIR, "templates"),
+    static_folder=os.path.join(BASE_DIR, "static")
+)
 
 def multi_day_forecast(model, scaler, df, days=5):
     forecasts = []
@@ -62,12 +68,24 @@ def get_symbol_from_company(company_name):
     return None
 
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# ✅ CORRECT BASE DIRECTORY
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 MODEL_PATH = os.path.join(BASE_DIR, "models", "linear_regression.pkl")
 SCALER_PATH = os.path.join(BASE_DIR, "models", "scaler.pkl")
 
-model = joblib.load(MODEL_PATH)
-scaler = joblib.load(SCALER_PATH)
+# 🔹 Global variables
+model = None
+scaler = None
+def load_models():
+    global model, scaler
+    if model is None:
+        model = joblib.load(MODEL_PATH)
+    if scaler is None:
+        scaler = joblib.load(SCALER_PATH)
+
+# model = joblib.load(MODEL_PATH)
+# scaler = joblib.load(SCALER_PATH)
 
 
 def calculate_rsi(series, period=14):
@@ -82,6 +100,7 @@ def calculate_rsi(series, period=14):
 
 @app.route("/", methods=["GET", "POST"])
 def index():
+    load_models() 
     prediction = None
     symbol = None
     prices = []
@@ -255,4 +274,4 @@ def search_company():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run()
