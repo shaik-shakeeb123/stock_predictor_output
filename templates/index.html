@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <title>Stock Price Predictor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <!-- Fonts + CSS -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+    <div class="animated-bg" aria-hidden="true"></div>
+    <div id="mouse-glow" aria-hidden="true"></div>
+    <div class="background-glow" aria-hidden="true">
+        <div class="glow"></div>
+        <div class="glow"></div>
+    </div>
+
+    <main class="app-container" role="main">
+        <header class="app-header">
+            <div>
+                <h1>Stock Price Predictor</h1>
+                <p class="subtitle">ML-driven next-day price forecast · Clean, fast insights</p>
+            </div>
+
+            <div class="controls">
+                <div class="toggle-container" title="Toggle theme">
+                    <label class="access-label" for="themeToggle">Theme</label>
+                    <label class="switch" aria-hidden="true">
+                        <input type="checkbox" id="themeToggle" aria-label="Toggle dark theme">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="next-day-meta">
+                    {% if next_day_date %}
+                    <div class="next-day-label">Next Trading Day</div>
+                    <div class="next-day-date">{{ next_day_date }}</div>
+                    {% endif %}
+                </div>
+            </div>
+        </header>
+
+        <section class="card grid">
+            <form class="search-panel" method="POST" onsubmit="showLoader()" novalidate>
+                <label for="companyInput" class="visually-hidden">Company name or symbol</label>
+                <div class="autocomplete">
+                    <input id="companyInput" name="symbol" type="text" placeholder="Search company (e.g. Tesla)" autocomplete="off" required>
+                    <div id="suggestions" class="suggestions" role="listbox" aria-label="Suggestions"></div>
+                </div>
+
+                {% if error %}
+                <div class="error" role="alert">{{ error }}</div>
+                {% endif %}
+
+                <div class="actions">
+                    <button type="submit" class="btn primary">Predict</button>
+                    <button type="button" class="btn ghost" id="clearBtn">Clear</button>
+                </div>
+
+                <div id="loader" class="loader hidden" role="status" aria-hidden="true"></div>
+            </form>
+
+            <aside class="result-panel" aria-live="polite">
+                {% if prediction %}
+                <div class="result-card">
+                    <div class="result-title">Prediction</div>
+                    <div class="result-sub">Next-day price for <strong>{{ symbol }}</strong></div>
+                    <div class="price">₹ {{ prediction }}</div>
+                </div>
+                {% else %}
+                <div class="placeholder">Enter a company and press Predict to see results.</div>
+                {% endif %}
+
+                {% if forecast_5 %}
+                <div class="forecast-box">
+                    <h4>Next 5-Day Forecast</h4>
+                    <ul>
+                        {% for price in forecast_5 %}
+                        <li>₹ {{ price }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+            </aside>
+        </section>
+
+        <section class="charts card">
+            <canvas id="priceChart" aria-label="Historical and forecast price chart" role="img"></canvas>
+
+            {% if prediction and next_day_date %}
+            <div class="next-day-card">
+                <div class="next-day-label">Predicted</div>
+                <div class="next-day-date">{{ next_day_date }}</div>
+                <div class="next-day-price">₹ {{ prediction }}</div>
+            </div>
+            {% endif %}
+        </section>
+
+        <section class="trending card">
+            <h3>🔥 Trending Stocks</h3>
+            <div class="trending-row" id="trendingRow" aria-hidden="false"></div>
+        </section>
+
+        <!-- Data for client scripts -->
+        <script id="chart-data" type="application/json">
+            {
+                "prices": {{ prices | tojson }},
+                "dates": {{ dates | tojson }}
+            }
+        </script>
+
+        {% if forecast_5 %}
+        <script id="forecast-data" type="application/json">
+        {
+            "future5": {{ forecast_5 | tojson }},
+            "future10": {{ forecast_10 | tojson }},
+            "futureDates5": {{ future_dates_5 | tojson }},
+            "futureDates10": {{ future_dates_10 | tojson }}
+        }
+        </script>
+        {% endif %}
+
+        <footer class="footer">
+            Built with ❤️ using Machine Learning & Flask
+        </footer>
+    </main>
+
+    <!-- Scripts -->
+    <script>
+        // Theme toggle
+        const themeToggle = document.getElementById('themeToggle');
+        themeToggle.addEventListener('change', () => document.body.classList.toggle('dark'));
+
+        // Loader
+        function showLoader() {
+            document.getElementById('loader').classList.remove('hidden');
+            document.getElementById('suggestions').innerHTML = '';
+        }
+        document.getElementById('clearBtn').addEventListener('click', () => {
+            document.getElementById('companyInput').value = '';
+            document.getElementById('suggestions').innerHTML = '';
+        });
+    </script>
+
+    <script>
+        // Chart rendering
+        const chartDataEl = document.getElementById("chart-data");
+        const forecastEl = document.getElementById("forecast-data");
+        const canvas = document.getElementById("priceChart");
+
+        if (chartDataEl && canvas) {
+            const history = JSON.parse(chartDataEl.textContent);
+            const forecast = forecastEl ? JSON.parse(forecastEl.textContent) : null;
+            const ctx = canvas.getContext("2d");
+
+            const datasets = [{
+                label: "Historical Close",
+                data: history.prices,
+                borderColor: "#ff5a5f",
+                backgroundColor: "rgba(255,90,95,0.06)",
+                tension: 0.25,
+                fill: true,
+                pointRadius: 0
+            }];
+
+            let labels = [...history.dates];
+
+            if (forecast) {
+                datasets.push({
+                    label: "5-Day Forecast",
+                    data: Array(history.prices.length - 1).fill(null)
+                        .concat([history.prices.at(-1)], forecast.future5),
+                    borderColor: "#2ca6ff",
+                    borderDash: [6, 6],
+                    tension: 0.25,
+                    fill: false,
+                    pointRadius: 0
+                });
+
+                labels = labels.concat(forecast.futureDates5);
+            }
+
+            new Chart(ctx, {
+                type: "line",
+                data: { labels, datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: true, labels: { boxWidth: 12 } },
+                        tooltip: { mode: 'index', intersect: false }
+                    },
+                    scales: {
+                        x: { grid: { display: false } },
+                        y: { grid: { color: 'rgba(255,255,255,0.03)' } }
+                    }
+                }
+            });
+        }
+    </script>
+
+    <script>
+        // Autocomplete + suggestions
+        const input = document.getElementById("companyInput");
+        const suggestionsBox = document.getElementById("suggestions");
+        let debounce = null;
+
+        input.addEventListener("input", () => {
+            clearTimeout(debounce);
+            const q = input.value.trim();
+            if (q.length < 2) { suggestionsBox.innerHTML = ''; return; }
+
+            debounce = setTimeout(() => {
+                fetch(`/search?q=${encodeURIComponent(q)}`)
+                    .then(r => r.json())
+                    .then(data => {
+                        suggestionsBox.innerHTML = '';
+                        (data.results || []).slice(0, 8).forEach(item => {
+                            const div = document.createElement('div');
+                            div.className = 'suggestion-item';
+                            div.textContent = `${item.name} (${item.symbol})`;
+                            div.setAttribute('role','option');
+                            div.onclick = () => {
+                                input.value = item.name;
+                                suggestionsBox.innerHTML = '';
+                            };
+                            suggestionsBox.appendChild(div);
+                        });
+                    }).catch(() => { suggestionsBox.innerHTML = ''; });
+            }, 300);
+        });
+
+        document.addEventListener('click', e => {
+            if (!e.target.closest('.autocomplete')) suggestionsBox.innerHTML = '';
+        });
+    </script>
+
+    <script>
+        // Trending mini-cards with hover charts
+        (function () {
+            const trending = ["AAPL", "MSFT", "TSLA", "AMZN", "GOOGL", "META", "NFLX"];
+            const row = document.getElementById("trendingRow");
+            if (!row) return;
+
+            trending.forEach(symbol => {
+                const card = document.createElement('div');
+                card.className = 'stock-card';
+                card.innerHTML = `
+                    <div class="card-front">
+                        <div class="stock-name">${symbol}</div>
+                        <div class="stock-price">Hover for chart</div>
+                    </div>
+                    <div class="card-overlay">
+                        <canvas class="mini-chart" width="280" height="90" aria-hidden="true"></canvas>
+                        <div class="view-text">Click to predict</div>
+                    </div>`;
+                let loaded = false;
+
+                card.addEventListener('mouseenter', () => {
+                    if (loaded) return;
+                    fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=14d&interval=1d`)
+                        .then(r => r.json())
+                        .then(data => {
+                            const prices = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || [];
+                            const ctx = card.querySelector('canvas').getContext('2d');
+                            new Chart(ctx, {
+                                type: 'line',
+                                data: { labels: prices.map((_,i)=>i), datasets: [{ data: prices, borderColor: '#ff5a5f', borderWidth: 1.5, tension: 0.3, fill: false }] },
+                                options: { responsive: false, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { display: false } } }
+                            });
+                            loaded = true;
+                        }).catch(()=>{/* ignore */});
+                });
+
+                card.onclick = () => {
+                    document.getElementById('companyInput').value = symbol;
+                    document.querySelector('form').submit();
+                };
+
+                row.appendChild(card);
+            });
+        })();
+    </script>
+
+    <script>
+        // Mouse reactive glow
+        const glow = document.getElementById('mouse-glow');
+        document.addEventListener('mousemove', e => {
+            glow.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
+        });
+    </script>
+
+    <script>
+        // floating particles background
+        const animatedBg = document.querySelector('.animated-bg');
+        if (animatedBg) {
+            const count = 25;
+            for (let i = 0; i < count; i++) {
+                const dot = document.createElement('div');
+                dot.className = 'particle';
+                dot.style.left = Math.random() * 100 + '%';
+                dot.style.animationDuration = 5 + Math.random() * 10 + 's';
+                dot.style.opacity = Math.random() * 0.5 + 0.2;
+                animatedBg.appendChild(dot);
+            }
+        }
+    </script>
+</body>
+
+</html>
