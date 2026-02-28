@@ -22,6 +22,10 @@ FEATURE_COLUMNS = [
 app = Flask(__name__)
 
 def multi_day_forecast(model, scaler, df, days=5):
+    # ✅ Safety check ONCE
+    if model is None or scaler is None:
+        return []
+
     forecasts = []
     temp_df = df.copy()
 
@@ -42,7 +46,6 @@ def multi_day_forecast(model, scaler, df, days=5):
         )
 
     return forecasts
-
 
 def get_symbol_from_company(company_name):
     url = "https://query1.finance.yahoo.com/v1/finance/search"
@@ -66,8 +69,12 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_PATH = os.path.join(BASE_DIR, "models", "linear_regression.pkl")
 SCALER_PATH = os.path.join(BASE_DIR, "models", "scaler.pkl")
 
-model = joblib.load(MODEL_PATH)
-scaler = joblib.load(SCALER_PATH)
+model = None
+scaler = None
+
+if os.path.exists(MODEL_PATH) and os.path.exists(SCALER_PATH):
+    model = joblib.load(MODEL_PATH)
+    scaler = joblib.load(SCALER_PATH)
 
 
 def calculate_rsi(series, period=14):
@@ -110,6 +117,9 @@ def index():
             if symbol is None:
                 error = "Company not found. Please try another name."
             else:
+                if model is None or scaler is None:
+                    error = "Prediction model is not available on server."
+                    return render_template("index.html", error=error)
                 data = yf.download(symbol, period="3mo", interval="1d")
 
                 if isinstance(data.columns, pd.MultiIndex):
