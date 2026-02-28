@@ -99,34 +99,65 @@ def index():
     future_dates_10 = []
     signal = "HOLD"
     signal_reason = "No strong signal"
-    pred_low=[]
-    pred_high=[]
-    prob_up=[]
-    prob_down=[]
+    pred_low=None
+    pred_high=None
+    prob_up=None
+    prob_down=None
     next_day_date = None
     error = None
-
+    template_defaults = {
+    "prices": [],
+    "dates": [],
+    "forecast_5": [],
+    "forecast_10": [],
+    "future_dates_5": [],
+    "future_dates_10": [],
+    "symbol": None,
+    "prediction": None,
+    "pred_low": None,
+    "pred_high": None,
+    "prob_up": None,
+    "prob_down": None,
+    "signal": "HOLD",
+    "signal_reason": "",
+    "next_day_date": None
+}
     if request.method == "POST":
         company_name = request.form.get("symbol", "").strip()
 
         if not company_name:
-            error = "Please enter a company name."
+            return render_template(
+                "index.html",
+                error="Please enter a company name.",
+                **template_defaults
+            )
         else:
             symbol = get_symbol_from_company(company_name)
 
             if symbol is None:
-                error = "Company not found. Please try another name."
+                return render_template(
+                    "index.html",
+                    error="Company not found. Please try another name.",
+                    **template_defaults
+                )
             else:
                 if model is None or scaler is None:
-                    error = "Prediction model is not available on server."
-                    return render_template("index.html", error=error)
+                    return render_template(
+                        "index.html",
+                        error="Prediction model is not available on server.",
+                        **template_defaults
+                    )
                 data = yf.download(symbol, period="3mo", interval="1d")
 
                 if isinstance(data.columns, pd.MultiIndex):
                     data.columns = data.columns.get_level_values(0)
 
                 if data.empty:
-                    error = "No market data available."
+                    return render_template(
+                        "index.html",
+                        error="No market data available.",
+                        **template_defaults
+                    )
                 else:
                     data = data[['Open', 'High', 'Low', 'Close', 'Volume']]
                     data.dropna(inplace=True)
@@ -212,7 +243,10 @@ def index():
         while next_day.weekday() >= 5:
             next_day += timedelta(days=1)
 
-        next_day_date = next_day.strftime("%d %b %Y")              
+        next_day_date = next_day.strftime("%d %b %Y")  
+    # ✅ FINAL SAFETY FIX (VERY IMPORTANT)
+    if error is None:
+        error = ""                
 
     return render_template(
     "index.html",
