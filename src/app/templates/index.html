@@ -50,7 +50,8 @@
             <form class="search-panel" method="POST" onsubmit="showLoader()" novalidate>
                 <label for="companyInput" class="visually-hidden">Company name or symbol</label>
                 <div class="autocomplete">
-                    <input id="companyInput" name="symbol" type="text" placeholder="Search company (e.g. Tesla)" autocomplete="off" required>
+                    <input id="companyInput" name="symbol" type="text" placeholder="Search company (e.g. Tesla)"
+                        autocomplete="off" required>
                     <div id="suggestions" class="suggestions" role="listbox" aria-label="Suggestions"></div>
                 </div>
 
@@ -110,8 +111,8 @@
         <!-- Data for client scripts -->
         <script id="chart-data" type="application/json">
             {
-                "prices": {{ prices | tojson }},
-                "dates": {{ dates | tojson }}
+                "prices": {{ prices | default([]) | tojson }},
+"dates": {{ dates | default([]) | tojson }}
             }
         </script>
 
@@ -225,7 +226,7 @@
                             const div = document.createElement('div');
                             div.className = 'suggestion-item';
                             div.textContent = `${item.name} (${item.symbol})`;
-                            div.setAttribute('role','option');
+                            div.setAttribute('role', 'option');
                             div.onclick = () => {
                                 input.value = item.name;
                                 suggestionsBox.innerHTML = '';
@@ -271,11 +272,11 @@
                             const ctx = card.querySelector('canvas').getContext('2d');
                             new Chart(ctx, {
                                 type: 'line',
-                                data: { labels: prices.map((_,i)=>i), datasets: [{ data: prices, borderColor: '#ff5a5f', borderWidth: 1.5, tension: 0.3, fill: false }] },
+                                data: { labels: prices.map((_, i) => i), datasets: [{ data: prices, borderColor: '#ff5a5f', borderWidth: 1.5, tension: 0.3, fill: false }] },
                                 options: { responsive: false, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { display: false } } }
                             });
                             loaded = true;
-                        }).catch(()=>{/* ignore */});
+                        }).catch(() => {/* ignore */ });
                 });
 
                 card.onclick = () => {
