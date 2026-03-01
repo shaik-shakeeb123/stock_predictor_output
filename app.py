@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request
 from datetime import timedelta
+from datetime import datetime
 import yfinance as yf
 import pandas as pd
 import joblib
@@ -161,14 +162,19 @@ def index():
                     currency_code = "USD"
 
                 # 3️⃣ Download data (Render-safe)
-                data = yf.download(
-                    symbol,
-                    period="1mo",        # start small for cloud
-                    interval="1d",
-                    progress=False,
-                    threads=False
-                )
+                try:
+                    ticker = yf.Ticker(symbol)
+                    data = ticker.history(period="1mo", interval="1d")
 
+                    # 🔁 Fallback if Yahoo blocks period-based fetch
+                    if data.empty:
+                        end = datetime.today()
+                        start = end - timedelta(days=45)
+                        data = ticker.history(start=start, end=end, interval="1d")
+
+                except Exception as e:
+                    print("Yahoo error:", e)
+                    data = pd.DataFrame()
                 # Debug (VERY IMPORTANT for Render logs)
                 print("SYMBOL:", symbol)
                 print("DATA SHAPE:", data.shape)
@@ -204,6 +210,13 @@ def index():
                     df_raw['Daily_Return'] = df_raw['Close'].pct_change()
                     df_raw['RSI'] = calculate_rsi(df_raw['Close'])
                     df_raw.dropna(inplace=True)
+                    if len(df_raw) < 15:
+                        error = "Not enough market data available."
+                        return render_template(
+                            "index.html",
+                            error=error,
+                            symbol=symbol
+                        )
 
                     # 6️⃣ Signals (use RAW values)
                     if len(df_raw) >= 2:
