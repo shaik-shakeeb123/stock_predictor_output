@@ -117,6 +117,28 @@ def calculate_rsi(series, period=14):
     avg_loss = loss.rolling(period).mean()
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
+def fetch_stock_data(symbol):
+    try:
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json"
+        })
+
+        ticker = yf.Ticker(symbol, session=session)
+        data = ticker.history(period="1mo", interval="1d")
+
+        # Fallback to date-range
+        if data.empty:
+            end = datetime.today()
+            start = end - timedelta(days=45)
+            data = ticker.history(start=start, end=end, interval="1d")
+
+        return data
+
+    except Exception as e:
+        print("Yahoo blocked:", e)
+        return pd.DataFrame()
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -162,19 +184,7 @@ def index():
                     currency_code = "USD"
 
                 # 3️⃣ Download data (Render-safe)
-                try:
-                    ticker = yf.Ticker(symbol)
-                    data = ticker.history(period="1mo", interval="1d")
-
-                    # 🔁 Fallback if Yahoo blocks period-based fetch
-                    if data.empty:
-                        end = datetime.today()
-                        start = end - timedelta(days=45)
-                        data = ticker.history(start=start, end=end, interval="1d")
-
-                except Exception as e:
-                    print("Yahoo error:", e)
-                    data = pd.DataFrame()
+                data = fetch_stock_data(symbol)
                 # Debug (VERY IMPORTANT for Render logs)
                 print("SYMBOL:", symbol)
                 print("DATA SHAPE:", data.shape)
