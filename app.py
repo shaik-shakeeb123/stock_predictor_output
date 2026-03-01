@@ -9,14 +9,10 @@ import numpy as np
 from pandas.tseries.offsets import BDay
 
 FEATURE_COLUMNS = [
-    "Open",
-    "High",
-    "Low",
-    "Close",
-    "Volume",
+    "Daily_Return",
     "MA_5",
     "MA_10",
-    "Daily_Return"
+    "Volume"
 ]
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -27,51 +23,73 @@ app = Flask(
     static_folder=os.path.join(BASE_DIR, "static")
 )
 
-def multi_day_forecast(model, scaler, df, days=5):
+def multi_day_forecast(model, df_scaled, last_close, days=5):
     forecasts = []
-    temp_df = df.copy()
+    temp_df = df_scaled.copy()
+    current_price = last_close
 
     for _ in range(days):
-        X = temp_df[FEATURE_COLUMNS].iloc[-1:]
-        pred_norm = model.predict(X)[0]
+        X = temp_df[FEATURE_COLUMNS].iloc[-1:].values  # <-- IMPORTANT
+        predicted_return = model.predict(X)[0]
+        predicted_return = np.clip(predicted_return, -0.10, 0.10)
 
-        dummy = [0, 0, 0, pred_norm, 0]
-        actual_price = scaler.inverse_transform([dummy])[0][3]
-        forecasts.append(round(actual_price, 2))
+        next_price = current_price * (1 + predicted_return)
+        forecasts.append(round(next_price, 2))
 
         new_row = temp_df.iloc[-1].copy()
-        new_row["Close"] = pred_norm
+        new_row["Daily_Return"] = predicted_return
 
-        temp_df = pd.concat(
-            [temp_df, pd.DataFrame([new_row])],
-            ignore_index=True
-        )
+        temp_df = pd.concat([temp_df, pd.DataFrame([new_row])], ignore_index=True)
+        current_price = next_price
 
     return forecasts
-
-
+def get_currency(symbol):
+    if symbol.endswith(".NS") or symbol.endswith(".BO"):
+        return "₹", "INR"
+    return "$", "USD"
 def get_symbol_from_company(company_name):
+    # ✅ If user already typed correct Yahoo symbol
+    company_name = company_name.strip().upper()
+    if company_name.endswith(".NS") or company_name.endswith(".BO"):
+        return company_name
+
     url = "https://query1.finance.yahoo.com/v1/finance/search"
-    params = {"q": company_name, "quotesCount": 1, "newsCount": 0}
-    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    params = {"q": company_name, "quotesCount": 5, "newsCount": 0}
+    headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
         response = requests.get(url, params=params, headers=headers, timeout=5)
-        if response.status_code != 200 or not response.text.strip():
-            return None
         data = response.json()
-        if "quotes" in data and len(data["quotes"]) > 0:
-            return data["quotes"][0].get("symbol")
+        quotes = data.get("quotes", [])
+
+        # 1️⃣ Prefer NSE
+        for q in quotes:
+            sym = q.get("symbol", "")
+            if sym.endswith(".NS"):
+                return sym
+
+        # 2️⃣ Then BSE
+        for q in quotes:
+            sym = q.get("symbol", "")
+            if sym.endswith(".BO"):
+                return sym
+
+        # 3️⃣ Fallback (US / global)
+        if quotes:
+            return quotes[0].get("symbol")
+
     except Exception:
         return None
 
     return None
 
 
+
+
 # ✅ CORRECT BASE DIRECTORY
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-MODEL_PATH = os.path.join(BASE_DIR, "models", "linear_regression.pkl")
+MODEL_PATH = os.path.join(BASE_DIR, "models", "random_forest.pkl")
 SCALER_PATH = os.path.join(BASE_DIR, "models", "scaler.pkl")
 
 # 🔹 Global variables
@@ -79,11 +97,13 @@ model = None
 scaler = None
 def load_models():
     global model, scaler
-    if model is None:
-        model = joblib.load(MODEL_PATH)
-    if scaler is None:
-        scaler = joblib.load(SCALER_PATH)
-
+    try:
+        if model is None:
+            model = joblib.load(MODEL_PATH)
+        if scaler is None:
+            scaler = joblib.load(SCALER_PATH)
+    except Exception as e:
+        raise RuntimeError(f"Model loading failed: {e}")
 # model = joblib.load(MODEL_PATH)
 # scaler = joblib.load(SCALER_PATH)
 
@@ -115,6 +135,8 @@ def index():
     pred_high=[]
     prob_up=[]
     prob_down=[]
+    currency_code = None
+    currency_symbol = None
     next_day_date = None
     error = None
 
@@ -125,6 +147,16 @@ def index():
             error = "Please enter a company name."
         else:
             symbol = get_symbol_from_company(company_name)
+        # 🔹 Detect currency based on symbol
+            if symbol is None:
+                error = "Company not found. Please try another name."
+            else:
+                if symbol.endswith(".NS") or symbol.endswith(".BO"):
+                    currency_symbol = "₹"
+                    currency_code = "INR"
+                else:
+                    currency_symbol = "$"
+                    currency_code = "USD"    
 
             if symbol is None:
                 error = "Company not found. Please try another name."
@@ -151,18 +183,25 @@ def index():
 
                     
 
-                    scaled = scaler.transform(data)
-                    df = pd.DataFrame(scaled, columns=data.columns)
+                   # 1️⃣ Start with raw data
+                    df = data.copy()
 
+                    # 2️⃣ Create technical indicators FIRST
                     df['MA_5'] = df['Close'].rolling(5).mean()
                     df['MA_10'] = df['Close'].rolling(10).mean()
                     df['Daily_Return'] = df['Close'].pct_change()
                     df['RSI'] = calculate_rsi(df['Close'])
+
+                    # 3️⃣ Drop rows with NaN values
                     df.dropna(inplace=True)
+                    df_signal = df.copy()   # ✅ ADD THIS HERE
+
+                    # 4️⃣ Scale ONLY trained features
+                    df[FEATURE_COLUMNS] = scaler.transform(df[FEATURE_COLUMNS])
 
                     if len(df) >= 2:
-                        last = df.iloc[-1]
-                        prev = df.iloc[-2]
+                        last = df_signal.iloc[-1]
+                        prev = df_signal.iloc[-2]
 
                         if last['RSI'] < 30:
                             signal = "BUY"
@@ -182,12 +221,20 @@ def index():
                         'Volume', 'MA_5', 'MA_10', 'Daily_Return'
                     ]
 
-                    latest_features = df[model_features].iloc[-1:].values
-                    pred_norm = model.predict(latest_features)[0]
+                    # 🔹 Take last row features (already scaled)
+                    latest_features = df[FEATURE_COLUMNS].iloc[-1:]
 
-                    dummy = [0, 0, 0, pred_norm, 0]
-                    actual_price = scaler.inverse_transform([dummy])[0][3]
-                    prediction = round(actual_price, 2)
+                    # 🔹 Predict next-day return
+                    # df is ALREADY scaled
+                    latest_features = df[FEATURE_COLUMNS].iloc[-1:]
+                    predicted_return = model.predict(latest_features.values)[0]
+
+                    # 🔒 HARD SAFETY CLIP (±10%)
+                    predicted_return = np.clip(predicted_return, -0.10, 0.10)
+
+                    # 🔹 Convert return → price
+                    last_close = data["Close"].iloc[-1]
+                    prediction = round(last_close * (1 + predicted_return), 2)
                     # ===================== STEP 1 ADDITIONS =====================
 
                     # Last actual closing price
@@ -209,8 +256,8 @@ def index():
                     # 🔹 Next trading day (skip weekends)
                     next_trading_day = (pd.to_datetime(dates[-1]) + BDay(1)).strftime("%d %b %Y")
 
-                    forecast_5 = multi_day_forecast(model, scaler, df, 5)
-                    forecast_10 = multi_day_forecast(model, scaler, df, 10)
+                    forecast_5 = multi_day_forecast(model, df, last_close, 5)
+                    forecast_10 = multi_day_forecast(model, df, last_close, 10)
     
     if dates:
         last_date = pd.to_datetime(dates[-1])
@@ -227,6 +274,8 @@ def index():
     "index.html",
     prediction=prediction,
     next_day_date=next_day_date,
+    currency_symbol=currency_symbol,
+    currency_code=currency_code,
 
     # ✅ NEW STEP-1 VARIABLES
     pred_low=pred_low,
@@ -273,5 +322,8 @@ def search_company():
         return {"results": []}
 
 
+
+
 if __name__ == "__main__":
-    app.run()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
