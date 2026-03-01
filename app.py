@@ -119,9 +119,26 @@ def calculate_rsi(series, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 def fetch_stock_data(symbol):
+    # 🇮🇳 Indian stocks → Yahoo
+    if symbol.endswith(".NS") or symbol.endswith(".BO"):
+        return yf.download(
+            symbol,
+            period="3mo",
+            interval="1d",
+            progress=False,
+            threads=False
+        )
+
+    # 🇺🇸 US stocks → Alpha Vantage
+    if "." in symbol:
+        symbol = symbol.split(".")[0]
+    API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
+    if not API_KEY:
+        return pd.DataFrame()
+
     url = (
         "https://www.alphavantage.co/query"
-        "?function=TIME_SERIES_DAILY"
+        "?function=TIME_SERIES_DAILY_ADJUSTED"
         f"&symbol={symbol}"
         "&outputsize=compact"
         f"&apikey={API_KEY}"
@@ -136,14 +153,21 @@ def fetch_stock_data(symbol):
 
     df = pd.DataFrame.from_dict(
         data["Time Series (Daily)"], orient="index"
-    ).astype(float)
+    )
 
-    df.columns = ["Open", "High", "Low", "Close", "Volume"]
+    df = df.rename(columns={
+        "1. open": "Open",
+        "2. high": "High",
+        "3. low": "Low",
+        "4. close": "Close",
+        "6. volume": "Volume"
+    })
+
+    df = df[["Open", "High", "Low", "Close", "Volume"]].astype(float)
     df.index = pd.to_datetime(df.index)
     df.sort_index(inplace=True)
 
     return df
-
 
 @app.route("/", methods=["GET", "POST"])
 def index():
