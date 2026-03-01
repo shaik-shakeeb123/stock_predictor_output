@@ -146,29 +146,40 @@ def index():
         if not company_name:
             error = "Please enter a company name."
         else:
+            # 1️⃣ Resolve symbol
             symbol = get_symbol_from_company(company_name)
-        # 🔹 Detect currency based on symbol
+
             if symbol is None:
                 error = "Company not found. Please try another name."
             else:
+                # 2️⃣ Detect currency
                 if symbol.endswith(".NS") or symbol.endswith(".BO"):
                     currency_symbol = "₹"
                     currency_code = "INR"
                 else:
                     currency_symbol = "$"
-                    currency_code = "USD"    
+                    currency_code = "USD"
 
-            if symbol is None:
-                error = "Company not found. Please try another name."
-            else:
-                data = yf.download(symbol, period="3mo", interval="1d")
+                # 3️⃣ Download data (Render-safe)
+                data = yf.download(
+                    symbol,
+                    period="1mo",        # start small for cloud
+                    interval="1d",
+                    progress=False,
+                    threads=False
+                )
 
-                if isinstance(data.columns, pd.MultiIndex):
-                    data.columns = data.columns.get_level_values(0)
+                # Debug (VERY IMPORTANT for Render logs)
+                print("SYMBOL:", symbol)
+                print("DATA SHAPE:", data.shape)
 
                 if data.empty:
                     error = "No market data available."
                 else:
+                    # 4️⃣ Clean OHLCV
+                    if isinstance(data.columns, pd.MultiIndex):
+                        data.columns = data.columns.get_level_values(0)
+
                     data = data[['Open', 'High', 'Low', 'Close', 'Volume']]
                     data.dropna(inplace=True)
 
@@ -177,31 +188,27 @@ def index():
 
                     if dates:
                         last_date = pd.to_datetime(dates[-1])
-                        future_dates_5 = [(last_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 6)]
-                        future_dates_10 = [(last_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 11)]
+                        future_dates_5 = [
+                            (last_date + timedelta(days=i)).strftime("%Y-%m-%d")
+                            for i in range(1, 6)
+                        ]
+                        future_dates_10 = [
+                            (last_date + timedelta(days=i)).strftime("%Y-%m-%d")
+                            for i in range(1, 11)
+                        ]
 
+                    # 5️⃣ Feature engineering (RAW)
+                    df_raw = data.copy()
+                    df_raw['MA_5'] = df_raw['Close'].rolling(5).mean()
+                    df_raw['MA_10'] = df_raw['Close'].rolling(10).mean()
+                    df_raw['Daily_Return'] = df_raw['Close'].pct_change()
+                    df_raw['RSI'] = calculate_rsi(df_raw['Close'])
+                    df_raw.dropna(inplace=True)
 
-                    
-
-                   # 1️⃣ Start with raw data
-                    df = data.copy()
-
-                    # 2️⃣ Create technical indicators FIRST
-                    df['MA_5'] = df['Close'].rolling(5).mean()
-                    df['MA_10'] = df['Close'].rolling(10).mean()
-                    df['Daily_Return'] = df['Close'].pct_change()
-                    df['RSI'] = calculate_rsi(df['Close'])
-
-                    # 3️⃣ Drop rows with NaN values
-                    df.dropna(inplace=True)
-                    df_signal = df.copy()   # ✅ ADD THIS HERE
-
-                    # 4️⃣ Scale ONLY trained features
-                    df[FEATURE_COLUMNS] = scaler.transform(df[FEATURE_COLUMNS])
-
-                    if len(df) >= 2:
-                        last = df_signal.iloc[-1]
-                        prev = df_signal.iloc[-2]
+                    # 6️⃣ Signals (use RAW values)
+                    if len(df_raw) >= 2:
+                        last = df_raw.iloc[-1]
+                        prev = df_raw.iloc[-2]
 
                         if last['RSI'] < 30:
                             signal = "BUY"
@@ -211,54 +218,37 @@ def index():
                             signal_reason = "RSI indicates overbought condition"
                         elif prev['MA_5'] < prev['MA_10'] and last['MA_5'] > last['MA_10']:
                             signal = "BUY"
-                            signal_reason = "Short-term MA crossed above long-term MA"
+                            signal_reason = "Golden cross detected"
                         elif prev['MA_5'] > prev['MA_10'] and last['MA_5'] < last['MA_10']:
                             signal = "SELL"
-                            signal_reason = "Short-term MA crossed below long-term MA"
+                            signal_reason = "Death cross detected"
 
-                    model_features = [
-                        'Open', 'High', 'Low', 'Close',
-                        'Volume', 'MA_5', 'MA_10', 'Daily_Return'
-                    ]
+                    # 7️⃣ Scale features (MODEL ONLY)
+                    df_scaled = df_raw.copy()
+                    df_scaled[FEATURE_COLUMNS] = scaler.transform(
+                        df_scaled[FEATURE_COLUMNS]
+                    )
 
-                    # 🔹 Take last row features (already scaled)
-                    latest_features = df[FEATURE_COLUMNS].iloc[-1:]
-
-                    # 🔹 Predict next-day return
-                    # df is ALREADY scaled
-                    latest_features = df[FEATURE_COLUMNS].iloc[-1:]
-                    predicted_return = model.predict(latest_features.values)[0]
-
-                    # 🔒 HARD SAFETY CLIP (±10%)
+                    # 8️⃣ Predict next-day return
+                    latest_features = df_scaled[FEATURE_COLUMNS].iloc[-1:].values
+                    predicted_return = model.predict(latest_features)[0]
                     predicted_return = np.clip(predicted_return, -0.10, 0.10)
 
-                    # 🔹 Convert return → price
-                    last_close = data["Close"].iloc[-1]
-                    prediction = round(last_close * (1 + predicted_return), 2)
-                    # ===================== STEP 1 ADDITIONS =====================
-
-                    # Last actual closing price
                     last_close = data['Close'].iloc[-1]
+                    prediction = round(last_close * (1 + predicted_return), 2)
 
-                    # 🔹 Prediction range (±2%)
-                    range_percent = 0.02
-                    pred_low = round(prediction * (1 - range_percent), 2)
-                    pred_high = round(prediction * (1 + range_percent), 2)
+                    # 9️⃣ Range + probability
+                    pred_low = round(prediction * 0.98, 2)
+                    pred_high = round(prediction * 1.02, 2)
 
-                    # 🔹 Probability logic
                     if prediction > last_close:
-                        prob_up = 65
-                        prob_down = 35
+                        prob_up, prob_down = 65, 35
                     else:
-                        prob_up = 35
-                        prob_down = 65
+                        prob_up, prob_down = 35, 65
 
-                    # 🔹 Next trading day (skip weekends)
-                    next_trading_day = (pd.to_datetime(dates[-1]) + BDay(1)).strftime("%d %b %Y")
-
-                    forecast_5 = multi_day_forecast(model, df, last_close, 5)
-                    forecast_10 = multi_day_forecast(model, df, last_close, 10)
-    
+                    # 🔟 Forecasts (PASS SCALED DF)
+                    forecast_5 = multi_day_forecast(model, df_scaled, last_close, 5)
+                    forecast_10 = multi_day_forecast(model, df_scaled, last_close, 10)
     if dates:
         last_date = pd.to_datetime(dates[-1])
 
