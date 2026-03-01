@@ -8,7 +8,8 @@ import os
 import requests
 import numpy as np
 from pandas.tseries.offsets import BDay
-
+API_KEY = os.getenv("ALPHAVANTAGE_API_KEY")
+print("ALPHA KEY FOUND:", API_KEY is not None)
 FEATURE_COLUMNS = [
     "Daily_Return",
     "MA_5",
@@ -118,27 +119,30 @@ def calculate_rsi(series, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 def fetch_stock_data(symbol):
-    try:
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json"
-        })
+    url = (
+        "https://www.alphavantage.co/query"
+        "?function=TIME_SERIES_DAILY"
+        f"&symbol={symbol}"
+        "&outputsize=compact"
+        f"&apikey={API_KEY}"
+    )
 
-        ticker = yf.Ticker(symbol, session=session)
-        data = ticker.history(period="1mo", interval="1d")
+    r = requests.get(url, timeout=10)
+    data = r.json()
 
-        # Fallback to date-range
-        if data.empty:
-            end = datetime.today()
-            start = end - timedelta(days=45)
-            data = ticker.history(start=start, end=end, interval="1d")
-
-        return data
-
-    except Exception as e:
-        print("Yahoo blocked:", e)
+    if "Time Series (Daily)" not in data:
+        print("Alpha error:", data)
         return pd.DataFrame()
+
+    df = pd.DataFrame.from_dict(
+        data["Time Series (Daily)"], orient="index"
+    ).astype(float)
+
+    df.columns = ["Open", "High", "Low", "Close", "Volume"]
+    df.index = pd.to_datetime(df.index)
+    df.sort_index(inplace=True)
+
+    return df
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -336,7 +340,7 @@ def search_company():
 
 
 
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+    
